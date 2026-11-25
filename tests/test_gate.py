@@ -199,6 +199,10 @@ def test_stop_hook_blocks_edits_to_the_gate(repo: Path, monkeypatch: pytest.Monk
     blocked = run_stop(repo, monkeypatch, capsys)
     assert blocked is not None and ".narrowpy-baseline.json` changed" in str(blocked["reason"])
     git(repo, "checkout", "--", ".narrowpy-baseline.json")
+    # A CRLF checkout (Windows, core.autocrlf) of the same baseline is not an edit.
+    bl = repo / ".narrowpy-baseline.json"
+    bl.write_bytes(bl.read_bytes().replace(b"\n", b"\r\n"))
+    assert run_stop(repo, monkeypatch, capsys) is None
     (repo / "pyproject.toml").write_text("[tool.narrowpy]\nmax-interface = 50\n")
     blocked = run_stop(repo, monkeypatch, capsys)
     assert blocked is not None and "[tool.narrowpy]" in str(blocked["reason"])

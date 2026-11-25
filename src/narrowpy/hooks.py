@@ -135,12 +135,22 @@ def _tool_section(text: str | None) -> Any:
         return "<unparseable>"
 
 
+def _content(text: str | None) -> Any:
+    """What a baseline says, ignoring line endings and formatting (CRLF checkouts on Windows)."""
+    if text is None:
+        return None
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        return "\n".join(line.rstrip() for line in text.strip().splitlines())
+
+
 def tampering(root: Path, base: str, cfg: Config) -> list[str]:
     out = []
     baseline = root / cfg.baseline
     before = show_file(root, base, cfg.baseline)
-    now = baseline.read_text(encoding="utf-8").strip() if baseline.is_file() else None
-    if (before.strip() if before is not None else None) != now:
+    now = baseline.read_text(encoding="utf-8") if baseline.is_file() else None
+    if _content(before) != _content(now):
         out.append(f"`{cfg.baseline}` changed since the session started")
     py = root / "pyproject.toml"
     if _tool_section(show_file(root, base, "pyproject.toml")) != _tool_section(py.read_text(encoding="utf-8") if py.is_file() else None):

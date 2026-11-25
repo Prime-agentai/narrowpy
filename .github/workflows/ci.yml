@@ -32,7 +32,7 @@ jobs:
         run: |
           src="$GITHUB_WORKSPACE"
           mkdir /tmp/app && cd /tmp/app
-          PYTHONPATH="$src/tests" python3 -c "import sloppy, pathlib; sloppy.write(pathlib.Path('.'))"
+          python3 "$src/tests/sloppy.py" .
           git init -q -b main && git -c user.name=ci -c user.email=ci@example.invalid commit -qm init --allow-empty
           code=0; uv tool run --from "$src" narrowpy > out.txt || code=$?
           cat out.txt
