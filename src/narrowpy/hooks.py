@@ -48,8 +48,8 @@ SOURCE = "git+https://github.com/Prime-agentai/narrowpy"
 
 def _ephemeral(path: str) -> bool:
     """Inside a throwaway ``uvx`` / ``uv tool run`` environment that may be gone tomorrow."""
-    p = path.replace("\\", "/")
-    return "/uv/" in p and "/archive-v" in p
+    # uv's cache layout, wherever the cache is (~/.cache/uv, UV_CACHE_DIR, a --no-cache temp dir).
+    return re.search(r"[/\\]archive-v\d+[/\\]", path) is not None
 
 
 def command_prefix() -> str:

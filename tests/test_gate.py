@@ -162,6 +162,9 @@ def test_hook_command_survives_an_ephemeral_uvx_run(monkeypatch: pytest.MonkeyPa
     assert hooks.command_prefix() == '"/opt/uv" tool run --from git+https://github.com/Prime-agentai/narrowpy narrowpy'
     monkeypatch.delenv("UV")
     assert hooks.command_prefix().startswith("uvx --from git+")
+    assert hooks._ephemeral("/tmp/.tmpkbEm1b/archive-v0/L0Lv/bin/narrowpy")  # uv --no-cache
+    assert hooks._ephemeral(r"C:\Users\u\AppData\Local\uv\cache\archive-v0\x\Scripts\narrowpy.exe")
+    assert not hooks._ephemeral("/home/u/.local/share/uv/tools/narrowpy/bin/narrowpy")  # uv tool install: stays
     monkeypatch.setattr(hooks.shutil, "which", lambda name: "/usr/local/bin/narrowpy" if name == "narrowpy" else None)
     assert hooks.command_prefix() == "narrowpy"
     monkeypatch.setattr(hooks.shutil, "which", lambda name: None)
