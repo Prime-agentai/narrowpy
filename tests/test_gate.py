@@ -154,6 +154,26 @@ def test_install_is_idempotent_and_keeps_settings(tmp_path: Path) -> None:
         hooks.install(tmp_path)
 
 
+def test_hook_command_survives_an_ephemeral_uvx_run(monkeypatch: pytest.MonkeyPatch) -> None:
+    cache = "/home/u/.cache/uv/archive-v0/abc/bin"
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: f"{cache}/{name}" if name == "narrowpy" else None)
+    monkeypatch.setattr(hooks.sys, "executable", f"{cache}/python")
+    monkeypatch.setenv("UV", "/opt/uv")
+    assert hooks.command_prefix() == '"/opt/uv" tool run --from git+https://github.com/Prime-agentai/narrowpy narrowpy'
+    monkeypatch.delenv("UV")
+    assert hooks.command_prefix().startswith("uvx --from git+")
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: "/usr/local/bin/narrowpy" if name == "narrowpy" else None)
+    assert hooks.command_prefix() == "narrowpy"
+    monkeypatch.setattr(hooks.shutil, "which", lambda name: None)
+    monkeypatch.setattr(hooks.sys, "executable", "/usr/bin/python3")
+    assert hooks.command_prefix() == '"/usr/bin/python3" -m narrowpy'
+
+
+def test_install_with_explicit_command(tmp_path: Path) -> None:
+    path, _ = hooks.install(tmp_path, "my-narrowpy")
+    assert json.loads(path.read_text())["hooks"]["Stop"][0]["hooks"][0]["command"] == "my-narrowpy hook stop"
+
+
 def test_stop_hook_flow(repo: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     hooks.session_start({"cwd": str(repo), "session_id": "s1"})
     assert run_stop(repo, monkeypatch, capsys) is None  # nothing changed

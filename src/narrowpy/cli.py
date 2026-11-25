@@ -106,11 +106,12 @@ def cmd_hook(args: argparse.Namespace) -> int:
     if args.action == "install":
         root = Path(args.path).resolve()
         try:
-            path, changed = hooks.install(root)
+            path, changed = hooks.install(root, args.command)
         except GateError as exc:
             print(f"narrowpy: {exc}", file=sys.stderr)
             return 2
         print(f"narrowpy: {'added SessionStart + Stop hooks to' if changed else 'hooks already present in'} {path}")
+        print(f"hooks run: {args.command or hooks.command_prefix()} hook stop")
         print("Claude Code now has to fix new structural problems before it can stop.")
         return 0
     if args.action == "session-start":
@@ -153,6 +154,7 @@ def build_parser() -> argparse.ArgumentParser:
     h = sub.add_parser("hook", help="Claude Code hooks: install, or run as session-start / stop")
     h.add_argument("action", choices=["install", "session-start", "stop"])
     h.add_argument("path", nargs="?", default=".")
+    h.add_argument("--command", metavar="PREFIX", help="how the hooks start narrowpy (default: detected)")
     h.set_defaults(func=cmd_hook)
 
     a = sub.add_parser("agents-md", help="print the lines to add to AGENTS.md / CLAUDE.md")

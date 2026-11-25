@@ -1,0 +1,45 @@
+name: CI
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        python: ["3.11", "3.12", "3.13"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Check (types, tests, CLI + Stop hook + MCP end to end, self-lint)
+        shell: bash
+        env:
+          PYTHONUTF8: "1"
+        run: uv run --python ${{ matrix.python }} --no-project --with pytest --with mypy bash -c 'PYTHON="$(command -v python)" bash scripts/check.sh'
+
+  quickstart:
+    # The README quickstart, literally, on a sloppy app.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - name: Quickstart
+        shell: bash
+        run: |
+          src="$GITHUB_WORKSPACE"
+          mkdir /tmp/app && cd /tmp/app
+          PYTHONPATH="$src/tests" python3 -c "import sloppy, pathlib; sloppy.write(pathlib.Path('.'))"
+          git init -q -b main && git -c user.name=ci -c user.email=ci@example.invalid commit -qm init --allow-empty
+          code=0; uv tool run --from "$src" narrowpy > out.txt || code=$?
+          cat out.txt
+          [ "$code" = 1 ]
+          grep -q "only the hidden imports close it" out.txt
+          uv tool run --from "$src" narrowpy baseline
+          uv tool run --from "$src" narrowpy check
+          uv tool run --from "$src" narrowpy hook install
+          grep -q "hook stop" .claude/*.json
+          uv tool run --from "$src" narrowpy agents-md | grep -q "narrowpy check"

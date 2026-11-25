@@ -13,6 +13,7 @@ its changes made the structure worse, and the AGENTS.md lines that say why.
 from __future__ import annotations
 
 import json
+import os
 import re
 import shutil
 import sys
@@ -42,14 +43,27 @@ AGENTS_MD = """\
 """
 
 
+SOURCE = "git+https://github.com/Prime-agentai/narrowpy"
+
+
+def _ephemeral(path: str) -> bool:
+    """Inside a throwaway ``uvx`` / ``uv tool run`` environment that may be gone tomorrow."""
+    p = path.replace("\\", "/")
+    return "/uv/" in p and "/archive-v" in p
+
+
 def command_prefix() -> str:
+    """How a hook should start narrowpy later, from a fresh shell."""
     exe = shutil.which("narrowpy")
-    if exe:
+    if exe and not _ephemeral(exe):
         return "narrowpy"
-    return f'"{sys.executable}" -m narrowpy'
+    if not _ephemeral(sys.executable) and not exe:
+        return f'"{sys.executable}" -m narrowpy'
+    uv = os.environ.get("UV") or shutil.which("uv")
+    return f'"{uv}" tool run --from {SOURCE} narrowpy' if uv else f"uvx --from {SOURCE} narrowpy"
 
 
-def install(root: Path) -> tuple[Path, bool]:
+def install(root: Path, prefix: str | None = None) -> tuple[Path, bool]:
     path = root.joinpath(*SETTINGS_REL)
     data: dict[str, Any] = {}
     if path.is_file():
@@ -60,7 +74,7 @@ def install(root: Path) -> tuple[Path, bool]:
         if isinstance(loaded, dict):
             data = loaded
     hooks = data.setdefault("hooks", {})
-    prefix = command_prefix()
+    prefix = prefix or command_prefix()
     changed = False
     for event, sub in (("SessionStart", "session-start"), ("Stop", "stop")):
         entries = hooks.setdefault(event, [])
