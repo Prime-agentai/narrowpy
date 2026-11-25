@@ -33,20 +33,19 @@ def _is_dunder(name: str) -> bool:
 
 def _working_functions(p: Project, modules: set[str]) -> dict[str, Fn]:
     out: dict[str, Fn] = {}
-    classes_here = {q for q, c in p.classes.items() if c.module in modules}
-    for c in p.classes.values():
-        if c.module not in modules:
-            continue
+    here = [m for m in p.iter_modules() if m.name in modules]
+    classes_here = {c.qualname for m in here for c in m.classes}
+    for c in (c for m in here for c in m.classes):
         for m in c.methods.values():
             if m.kind == "property" or _is_dunder(m.name) or m.wrapper:
                 continue
             q = f"{c.qualname}.{m.name}"
             out[q] = Fn(q, c.qualname)
-    for f in p.functions.values():
-        if f.module not in modules or f.wrapper or _is_dunder(f.name):
+    for f in (f for m in here for f in m.functions):
+        if f.wrapper or _is_dunder(f.name):
             continue
         thing = f.qualname
-        mod = p.modules[f.module]
+        mod = f.mod
         anns = [a.annotation for a in f.node.args.posonlyargs + f.node.args.args + f.node.args.kwonlyargs] + [f.node.returns]
         for ann in anns:
             if ann is None:
@@ -61,6 +60,12 @@ def _working_functions(p: Project, modules: set[str]) -> dict[str, Fn]:
                 break
         out[f.qualname] = Fn(f.qualname, thing)
     return out
+
+
+def _home(p: Project, qualname: str) -> str:
+    """The module a working function (``mod.func`` or ``mod.Class.method``) is written in."""
+    fn = p.find_function(qualname)
+    return fn.module if fn is not None else qualname.rsplit(".", 2)[0]
 
 
 def _unit(p: Project, facts: Facts, name: str, modules: set[str], max_size: int) -> tuple[Finding, set[str]] | None:
@@ -102,7 +107,7 @@ def _unit(p: Project, facts: Facts, name: str, modules: set[str], max_size: int)
                      | {u.module for u in facts.method_uses if u.module not in modules and f"{u.owner}.{u.method}" in shown})
     if callers:
         notes.append("used from: " + ", ".join(f"`{c}`" for c in callers[:max_size]) + (" ..." if len(callers) > max_size else ""))
-    mod = p.modules.get(name)
+    mod = p.find_module(name)
     site = Site(mod.src.rel, 1) if mod else min(shown.values())
     kind = "package" if mod is None or mod.src.is_package else "module"
     return Finding(
@@ -120,13 +125,14 @@ def _unit(p: Project, facts: Facts, name: str, modules: set[str], max_size: int)
 def check(p: Project, facts: Facts, max_size: int) -> list[Finding]:
     findings: list[Finding] = []
     flagged: set[str] = set()
-    for name in sorted(p.modules):
+    for name in [m.name for m in p.iter_modules()]:
         hit = _unit(p, facts, name, {name}, max_size)
         if hit is not None:
             findings.append(hit[0])
             flagged.add(name)
-    for pkg in sorted(m for m, mod in p.modules.items() if mod.src.is_package):
-        subtree = {m for m in p.modules if m == pkg or m.startswith(pkg + ".")}
+    names = [m.name for m in p.iter_modules()]
+    for pkg in [m.name for m in p.iter_modules() if m.src.is_package]:
+        subtree = {m for m in names if m == pkg or m.startswith(pkg + ".")}
         if len(subtree) < 2:
             continue
         hit = _unit(p, facts, pkg, subtree, max_size)
@@ -135,8 +141,7 @@ def check(p: Project, facts: Facts, max_size: int) -> list[Finding]:
         finding, shown = hit
         inside = flagged & subtree
         # Already said: every function the package shows comes from one module we reported.
-        if len(inside) == 1 and all(p.functions.get(q, None) is not None and p.functions[q].module in inside
-                                    or q.rsplit(".", 2)[0] in inside for q in shown):
+        if len(inside) == 1 and all(_home(p, q) in inside for q in shown):
             continue
         findings.append(finding)
     return findings

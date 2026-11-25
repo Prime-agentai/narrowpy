@@ -22,6 +22,7 @@ from collections import defaultdict
 
 from ..facts import Access, Facts, is_private
 from ..findings import HELD_IN_MIND, HINTS, Finding
+from ..hierarchy import inherits, lineage
 from ..project import ClassInfo, Project
 from ..types import ClassTy, Typer
 
@@ -33,12 +34,13 @@ RECORD_BASES = {
 LEAK_KINDS = {"write", "index", "call"}
 
 
-def is_record(p: Project, cls: ClassInfo) -> bool:
-    for c in p.mro(cls.qualname):
+def is_record(cls: ClassInfo) -> bool:
+    chain = lineage(cls)
+    for c in chain:
         if set(c.external_bases) & RECORD_BASES or any(b.endswith(("Error", "Exception")) for b in c.external_bases):
             return True
-    fields = {f for c in p.mro(cls.qualname) for f in c.fields}
-    for c in p.mro(cls.qualname):
+    fields = {f for c in chain for f in c.fields}
+    for c in chain:
         for m in c.methods.values():
             if m.kind != "method" or (m.name.startswith("__") and m.name.endswith("__")):
                 continue
@@ -62,7 +64,8 @@ def _holds_value(typer: Typer, owner: ClassInfo, fld: str) -> bool:
 def is_outsider(p: Project, owner: ClassInfo, a: Access) -> bool:
     if a.module == owner.module:
         return False
-    if a.from_class is not None and p.is_subclass(a.from_class, owner.qualname):
+    inside = p.find_class(a.from_class) if a.from_class is not None else None
+    if inside is not None and inherits(inside, owner.qualname):
         return False
     return True
 
@@ -70,8 +73,8 @@ def is_outsider(p: Project, owner: ClassInfo, a: Access) -> bool:
 def check(p: Project, facts: Facts, typer: Typer) -> list[Finding]:
     by_field: dict[tuple[str, str], list[Access]] = defaultdict(list)
     for a in facts.accesses:
-        owner = p.classes[a.owner]
-        if not is_outsider(p, owner, a):
+        owner = p.find_class(a.owner)
+        if owner is None or not is_outsider(p, owner, a):
             continue
         private = is_private(a.field)
         kind = a.kind
@@ -84,8 +87,10 @@ def check(p: Project, facts: Facts, typer: Typer) -> list[Finding]:
     for owner_q, fld in by_field:
         by_class[owner_q].add(fld)
     for owner_q, leaked in sorted(by_class.items()):
-        owner = p.classes[owner_q]
-        record = is_record(p, owner)
+        owner = p.find_class(owner_q)
+        if owner is None:
+            continue
+        record = is_record(owner)
         kept = sorted(f for f in owner.fields if f not in leaked)
         shares_all = not kept and not any(is_private(f) for f in owner.fields)
         for fld in sorted(leaked):
@@ -109,7 +114,7 @@ def check(p: Project, facts: Facts, typer: Typer) -> list[Finding]:
                 notes.append(f"... and {n - HELD_IN_MIND} more")
             others = sorted(f for f in leaked if f != fld)
             mods = sorted(per_module.items(), key=lambda kv: (-len(kv[1]), kv[0]))
-            picture = [f"{owner.qualname}  ({p.modules[owner.module].src.rel}:{owner.line})"]
+            picture = [f"{owner.qualname}  ({owner.mod.src.rel}:{owner.line})"]
             for i, (m, acc) in enumerate(mods[:HELD_IN_MIND]):
                 kinds = ", ".join(sorted({x.kind for x in acc}))
                 lead = f"  {fld} ◀── " if i == 0 else "  " + " " * len(fld) + " ◀── "

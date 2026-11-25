@@ -14,6 +14,7 @@ import builtins
 import functools
 from dataclasses import dataclass
 
+from .hierarchy import lineage, member
 from .project import ClassInfo, ImportBinding, MethodInfo, Module, Project, is_main_guard, last_ident
 
 
@@ -189,13 +190,15 @@ class Typer:
     # -- fields ---------------------------------------------------------------------
 
     def field_type(self, cls_q: str, attr: str) -> Ty | None:
-        owner = self.p.field_owner(cls_q, attr)
-        if owner is None:
-            prop = self.p.method_of(cls_q, attr)
-            if prop is not None and prop[1].kind == "property":
-                c, m = prop
-                return self.ann(self.p.modules[c.module], m.node.returns, cls_q)
+        cls = self.p.find_class(cls_q)
+        found = member(cls, attr) if cls is not None else None
+        if found is None:
             return None
+        if found.method is not None:
+            if found.method.kind == "property":
+                return self.ann(found.owner.mod, found.method.node.returns, cls_q)
+            return None
+        owner = found.owner
         key = (owner.qualname, attr)
         if key in self._field_cache:
             return self._field_cache[key]
@@ -210,7 +213,7 @@ class Typer:
         return t
 
     def _compute_field_type(self, owner: ClassInfo, attr: str) -> Ty | None:
-        mod = self.p.modules[owner.module]
+        mod = owner.mod
         f = owner.fields[attr]
         if f.annotation is not None:
             return self.ann(mod, f.annotation, owner.qualname)
@@ -276,9 +279,10 @@ class Typer:
         return self._immutable[cls_q]
 
     def _compute_immutable(self, cls_q: str) -> bool:
-        chain = self.p.mro(cls_q)
-        if not chain:
+        cls = self.p.find_class(cls_q)
+        if cls is None:
             return False
+        chain = lineage(cls)
         for c in chain:
             if set(c.external_bases) & {"NamedTuple", "Enum", "IntEnum", "StrEnum", "Flag", "IntFlag"}:
                 return True
@@ -315,7 +319,7 @@ class Typer:
         s = self._method_scopes.get(key)
         if s is None:
             m = cls.methods[name]
-            s = self.function_scope(self.p.modules[cls.module], m.node, cls.qualname, None)
+            s = self.function_scope(cls.mod, m.node, cls.qualname, None)
             self._method_scopes[key] = s
         return s
 
@@ -335,19 +339,7 @@ class Typer:
         for extra in (a.vararg, a.kwarg):
             if extra is not None:
                 params[extra.arg] = None
-        for n in own_nodes(fn):
-            if isinstance(n, ast.Import):
-                for alias in n.names:
-                    if alias.asname:
-                        s.local_imports[alias.asname] = ImportBinding(alias.name, None, n.lineno)
-                    else:
-                        head = alias.name.split(".", 1)[0]
-                        s.local_imports[head] = ImportBinding(head, None, n.lineno)
-            elif isinstance(n, ast.ImportFrom):
-                target = self.p.absolute(mod, n.module, n.level)
-                for alias in n.names:
-                    if alias.name != "*":
-                        s.local_imports[alias.asname or alias.name] = ImportBinding(target, alias.name, n.lineno)
+        s.local_imports.update(self.p.local_imports(mod, own_nodes(fn)))
         s.env.update(params)
         s.env.update(self._infer(s, fn, params))
         return s
@@ -416,12 +408,12 @@ class Typer:
         if kind == "iter":
             return t.elem if isinstance(t, IterTy) else None
         if kind == "enter" and isinstance(t, ClassTy):
-            found = self.p.method_of(t.q, "__enter__") or self.p.method_of(t.q, "__aenter__")
+            found = self._method(t.q, "__enter__") or self._method(t.q, "__aenter__")
             if found is None:
                 return None
             c, m = found
             if m.node.returns is not None:
-                return self.ann(self.p.modules[c.module], m.node.returns, t.q)
+                return self.ann(c.mod, m.node.returns, t.q)
             body = _strip_docstring(m.node.body)
             if body and isinstance(body[-1], ast.Return) and isinstance(body[-1].value, ast.Name) and m.node.args.args \
                     and body[-1].value.id == m.node.args.args[0].arg:
@@ -477,8 +469,8 @@ class Typer:
                 if sym.kind == "class":
                     return ClassTy(sym.qualname)
                 if sym.kind == "function":
-                    fn = self.p.functions[sym.qualname]
-                    return self.ann(self.p.modules[fn.module], fn.node.returns, None)
+                    fn = self.p.find_function(sym.qualname)
+                    return self.ann(fn.mod, fn.node.returns, None) if fn is not None else None
                 return None
         if isinstance(f, ast.Name):
             if f.id in {"list", "sorted", "reversed", "tuple", "set", "frozenset", "iter"} and e.args:
@@ -510,11 +502,18 @@ class Typer:
         return None
 
     def _method_return(self, cls_q: str, name: str) -> Ty | None:
-        found = self.p.method_of(cls_q, name)
+        found = self._method(cls_q, name)
         if found is None:
             return None
         c, m = found
-        return self.ann(self.p.modules[c.module], m.node.returns, cls_q)
+        return self.ann(c.mod, m.node.returns, cls_q)
+
+    def _method(self, cls_q: str, name: str) -> tuple[ClassInfo, MethodInfo] | None:
+        cls = self.p.find_class(cls_q)
+        found = member(cls, name) if cls is not None else None
+        if found is None or found.method is None:
+            return None
+        return found.owner, found.method
 
 
 @functools.lru_cache(maxsize=None)

@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from .findings import Site
+from .hierarchy import member
 from .project import ClassInfo, Module, Project, Symbol
 from .types import ClassTy, Scope, Typer, module_nodes, own_nodes
 
@@ -71,13 +72,13 @@ class Collector:
         self.typer = Typer(project)
         self.facts = Facts()
         self._private_owner: dict[str, list[str]] = {}
-        for c in project.classes.values():
+        for c in (c for m in project.iter_modules() for c in m.classes):
             for f in c.fields:
                 if is_private(f):
                     self._private_owner.setdefault(f, []).append(c.qualname)
 
     def run(self) -> Facts:
-        for mod in self.p.modules.values():
+        for mod in self.p.iter_modules():
             self._module(mod)
         return self.facts
 
@@ -92,8 +93,9 @@ class Collector:
                 self._function(mod, stmt, None, None, q)
             elif isinstance(stmt, ast.ClassDef):
                 q = f"{mod.name}.{stmt.name}"
-                if q in self.p.classes:
-                    self._class(mod, self.p.classes[q])
+                cls = self.p.find_class(q)
+                if cls is not None:
+                    self._class(mod, cls)
 
     def _class(self, mod: Module, cls: ClassInfo) -> None:
         body_scope = Scope(mod, {}, cls.qualname, {}, self.typer.module_scope(mod))
@@ -187,21 +189,23 @@ class Collector:
         site = Site(mod.src.rel, n.lineno)
         cls_sym = self.p.resolve_expr(mod, n.value, local=scope.imports()) if not self._is_local_chain_expr(scope, n.value) else None
         if cls_sym is not None and cls_sym.kind == "class":
-            m = self.p.method_of(cls_sym.qualname, n.attr)
-            if m is not None:
-                self.facts.method_uses.append(MethodUse(m[0].qualname, n.attr, mod.name, thing, site))
+            cls = self.p.find_class(cls_sym.qualname)
+            found = member(cls, n.attr) if cls is not None else None
+            if found is not None and found.method is not None:
+                self.facts.method_uses.append(MethodUse(found.owner.qualname, n.attr, mod.name, thing, site))
             return
         recv = self.typer.expr(scope, n.value)
         if isinstance(recv, ClassTy):
-            owner = self.p.field_owner(recv.q, n.attr)
-            if owner is not None:
-                self.facts.accesses.append(Access(owner.qualname, n.attr, _kind(n, parent), mod.name,
+            cls = self.p.find_class(recv.q)
+            found = member(cls, n.attr) if cls is not None else None
+            if found is None:
+                return
+            if found.method is None:
+                self.facts.accesses.append(Access(found.owner.qualname, n.attr, _kind(n, parent), mod.name,
                                                   scope.self_cls, thing, site, "type"))
                 return
-            m = self.p.method_of(recv.q, n.attr)
-            if m is not None:
-                self.facts.method_uses.append(MethodUse(m[0].qualname, n.attr, mod.name, thing, site))
-                self._ref(thing, mod, Symbol("class", m[0].qualname), n)
+            self.facts.method_uses.append(MethodUse(found.owner.qualname, n.attr, mod.name, thing, site))
+            self._ref(thing, mod, Symbol("class", found.owner.qualname), n)
             return
         if not is_private(n.attr) or (isinstance(n.value, ast.Name) and n.value.id in {me, "self", "cls"}):
             return

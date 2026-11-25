@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import ast
 import warnings
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Literal
@@ -76,7 +77,8 @@ class ClassInfo:
     name: str
     line: int
     node: ast.ClassDef
-    bases: list[str] = field(default_factory=list)  # resolved project base classes
+    mod: Module
+    bases: list[ClassInfo] = field(default_factory=list)  # resolved project base classes
     external_bases: list[str] = field(default_factory=list)  # last identifier of the others
     fields: dict[str, FieldInfo] = field(default_factory=dict)
     methods: dict[str, MethodInfo] = field(default_factory=dict)
@@ -91,6 +93,7 @@ class FunctionInfo:
     line: int
     node: ast.FunctionDef | ast.AsyncFunctionDef
     wrapper: bool
+    mod: Module
 
 
 @dataclass
@@ -101,6 +104,8 @@ class Module:
     imports: dict[str, ImportBinding] = field(default_factory=dict)
     aliases: dict[str, ast.expr] = field(default_factory=dict)
     records: list[ImportRecord] = field(default_factory=list)
+    classes: list[ClassInfo] = field(default_factory=list)
+    functions: list[FunctionInfo] = field(default_factory=list)
 
     @property
     def name(self) -> str:
@@ -159,9 +164,9 @@ class Project:
     def __init__(self, root: Path, cfg: Config | None = None, sources: list[SourceFile] | None = None) -> None:
         self.root = root.resolve()
         self.cfg = cfg or Config.load(self.root)
-        self.modules: dict[str, Module] = {}
-        self.classes: dict[str, ClassInfo] = {}
-        self.functions: dict[str, FunctionInfo] = {}
+        self._modules: dict[str, Module] = {}
+        self._classes: dict[str, ClassInfo] = {}
+        self._functions: dict[str, FunctionInfo] = {}
         self.parse_errors: list[str] = []
         for src in sources if sources is not None else find_sources(self.root, self.cfg):
             try:
@@ -172,15 +177,34 @@ class Project:
             except (SyntaxError, UnicodeDecodeError, ValueError, OSError) as exc:
                 self.parse_errors.append(f"{src.rel}: {exc.__class__.__name__}")
                 continue
-            self.modules[src.module] = Module(src=src, tree=tree)
-        for mod in self.modules.values():
+            self._modules[src.module] = Module(src=src, tree=tree)
+        for mod in self._modules.values():
             self._index(mod)
-        for cls in self.classes.values():
+        for cls in self._classes.values():
             self._resolve_bases(cls)
+
+    # -- the interface: look up and iterate, never the tables themselves ----------
+
+    def find_module(self, name: str) -> Module | None:
+        return self._modules.get(name)
+
+    def find_class(self, qualname: str) -> ClassInfo | None:
+        return self._classes.get(qualname)
+
+    def find_function(self, qualname: str) -> FunctionInfo | None:
+        return self._functions.get(qualname)
+
+    def iter_modules(self) -> list[Module]:
+        return [self._modules[k] for k in sorted(self._modules)]
+
+    def stats(self) -> tuple[int, int, int]:
+        """Modules, classes, and functions including methods."""
+        methods = sum(len(c.methods) for c in self._classes.values())
+        return len(self._modules), len(self._classes), len(self._functions) + methods
 
     # -- indexing -----------------------------------------------------------------
 
-    def absolute(self, mod: Module, module: str | None, level: int) -> str:
+    def _absolute(self, mod: Module, module: str | None, level: int) -> str:
         if level == 0:
             return module or ""
         base = mod.package
@@ -189,6 +213,24 @@ class Project:
         if module:
             return f"{base}.{module}" if base else module
         return base
+
+    def local_imports(self, mod: Module, nodes: Iterable[ast.AST]) -> dict[str, ImportBinding]:
+        """The names the import statements among ``nodes`` (one function's own code) bind."""
+        out: dict[str, ImportBinding] = {}
+        for n in nodes:
+            if isinstance(n, ast.Import):
+                for alias in n.names:
+                    if alias.asname:
+                        out[alias.asname] = ImportBinding(alias.name, None, n.lineno)
+                    else:
+                        head = alias.name.split(".", 1)[0]
+                        out[head] = ImportBinding(head, None, n.lineno)
+            elif isinstance(n, ast.ImportFrom):
+                target = self._absolute(mod, n.module, n.level)
+                for alias in n.names:
+                    if alias.name != "*":
+                        out[alias.asname or alias.name] = ImportBinding(target, alias.name, n.lineno)
+        return out
 
     def _index(self, mod: Module) -> None:
         self._collect_records(mod, mod.tree.body, deferred=False, type_only=False)
@@ -201,7 +243,7 @@ class Project:
                 for alias in stmt.names:
                     mod.records.append(ImportRecord(alias.name, (), stmt.lineno, deferred, type_only))
             elif isinstance(stmt, ast.ImportFrom):
-                target = self.absolute(mod, stmt.module, stmt.level)
+                target = self._absolute(mod, stmt.module, stmt.level)
                 names = tuple(a.name for a in stmt.names)
                 mod.records.append(ImportRecord(target, names, stmt.lineno, deferred, type_only))
             elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -235,7 +277,7 @@ class Project:
                     head = alias.name.split(".", 1)[0]
                     mod.imports.setdefault(head, ImportBinding(head, None, stmt.lineno))
         elif isinstance(stmt, ast.ImportFrom):
-            target = self.absolute(mod, stmt.module, stmt.level)
+            target = self._absolute(mod, stmt.module, stmt.level)
             for alias in stmt.names:
                 if alias.name == "*":
                     continue
@@ -243,11 +285,13 @@ class Project:
         elif isinstance(stmt, ast.ClassDef):
             q = f"{mod.name}.{stmt.name}"
             mod.defs[stmt.name] = Symbol("class", q)
-            self.classes[q] = self._class_info(mod, stmt, q)
+            self._classes[q] = self._class_info(mod, stmt, q)
+            mod.classes.append(self._classes[q])
         elif isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
             q = f"{mod.name}.{stmt.name}"
             mod.defs[stmt.name] = Symbol("function", q)
-            self.functions[q] = FunctionInfo(q, mod.name, stmt.name, stmt.lineno, stmt, is_wrapper(stmt))
+            self._functions[q] = FunctionInfo(q, mod.name, stmt.name, stmt.lineno, stmt, is_wrapper(stmt), mod)
+            mod.functions.append(self._functions[q])
         elif isinstance(stmt, ast.Assign) and len(stmt.targets) == 1 and isinstance(stmt.targets[0], ast.Name):
             if isinstance(stmt.value, (ast.Name, ast.Attribute)):
                 mod.aliases[stmt.targets[0].id] = stmt.value
@@ -265,7 +309,7 @@ class Project:
                     self._bind_top(mod, s, type_only)
 
     def _class_info(self, mod: Module, node: ast.ClassDef, q: str) -> ClassInfo:
-        info = ClassInfo(q, mod.name, node.name, node.lineno, node)
+        info = ClassInfo(q, mod.name, node.name, node.lineno, node, mod)
         info.decorators = [last_ident(d) for d in node.decorator_list]
         for stmt in node.body:
             if isinstance(stmt, (ast.FunctionDef, ast.AsyncFunctionDef)):
@@ -319,11 +363,12 @@ class Project:
             f.annotation = ann
 
     def _resolve_bases(self, cls: ClassInfo) -> None:
-        mod = self.modules[cls.module]
+        mod = cls.mod
         for b in cls.node.bases:
             sym = self.resolve_expr(mod, b)
-            if sym is not None and sym.kind == "class":
-                cls.bases.append(sym.qualname)
+            base = self._classes.get(sym.qualname) if sym is not None and sym.kind == "class" else None
+            if base is not None:
+                cls.bases.append(base)
             else:
                 cls.external_bases.append(last_ident(b))
 
@@ -334,7 +379,7 @@ class Project:
         if (module, name) in _seen:
             return None
         seen = _seen | {(module, name)}
-        mod = self.modules.get(module)
+        mod = self._modules.get(module)
         if mod is None:
             return None
         if name in mod.defs:
@@ -344,18 +389,18 @@ class Project:
         if name in mod.aliases:
             return self.resolve_expr(mod, mod.aliases[name], seen)
         sub = f"{module}.{name}"
-        if sub in self.modules:
+        if sub in self._modules:
             return Symbol("module", sub)
         return None
 
     def resolve_binding(self, b: ImportBinding, seen: frozenset[tuple[str, str]] = frozenset()) -> Symbol | None:
         if b.name is None:
-            return Symbol("module", b.module) if b.module in self.modules else None
+            return Symbol("module", b.module) if b.module in self._modules else None
         sym = self.resolve(b.module, b.name, seen)
         if sym is not None:
             return sym
         sub = f"{b.module}.{b.name}" if b.module else b.name
-        return Symbol("module", sub) if sub in self.modules else None
+        return Symbol("module", sub) if sub in self._modules else None
 
     def resolve_expr(self, mod: Module, expr: ast.expr, seen: frozenset[tuple[str, str]] = frozenset(),
                      local: dict[str, ImportBinding] | None = None) -> Symbol | None:
@@ -367,37 +412,4 @@ class Project:
             base = self.resolve_expr(mod, expr.value, seen, local)
             if base is not None and base.kind == "module":
                 return self.resolve(base.qualname, expr.attr, seen)
-        return None
-
-    # -- class hierarchy ----------------------------------------------------------
-
-    def mro(self, qualname: str) -> list[ClassInfo]:
-        out: list[ClassInfo] = []
-        seen: set[str] = set()
-        todo = [qualname]
-        while todo:
-            q = todo.pop(0)
-            c = self.classes.get(q)
-            if c is None or q in seen:
-                continue
-            seen.add(q)
-            out.append(c)
-            todo.extend(c.bases)
-        return out
-
-    def is_subclass(self, sub: str, sup: str) -> bool:
-        return any(c.qualname == sup for c in self.mro(sub))
-
-    def field_owner(self, cls: str, attr: str) -> ClassInfo | None:
-        for c in self.mro(cls):
-            if attr in c.methods:
-                return None
-            if attr in c.fields:
-                return c
-        return None
-
-    def method_of(self, cls: str, attr: str) -> tuple[ClassInfo, MethodInfo] | None:
-        for c in self.mro(cls):
-            if attr in c.methods:
-                return c, c.methods[attr]
         return None

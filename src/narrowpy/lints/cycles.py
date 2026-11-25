@@ -42,33 +42,33 @@ def lift(a: str, b: str) -> tuple[str, str, str] | None:
 def import_targets(p: Project, module: str, names: tuple[str, ...]) -> set[str]:
     out: set[str] = set()
     if not names:
-        if module in p.modules:
+        if p.find_module(module) is not None:
             out.add(module)
         else:  # ``import a.b.c`` where only ``a.b`` is ours
             parts = module.split(".")
             for i in range(len(parts) - 1, 0, -1):
-                if ".".join(parts[:i]) in p.modules:
+                if p.find_module(".".join(parts[:i])) is not None:
                     out.add(".".join(parts[:i]))
                     break
         return out
     for nm in names:
         if nm == "*":
-            if module in p.modules:
+            if p.find_module(module) is not None:
                 out.add(module)
             continue
         sym = p.resolve(module, nm)
         if sym is not None:
             out.add(sym.module)
-        elif f"{module}.{nm}" in p.modules:
+        elif p.find_module(f"{module}.{nm}") is not None:
             out.add(f"{module}.{nm}")
-        elif module in p.modules:
+        elif p.find_module(module) is not None:
             out.add(module)
     return out
 
 
 def ties(p: Project) -> list[Tie]:
     out: list[Tie] = []
-    for mod in p.modules.values():
+    for mod in p.iter_modules():
         for rec in mod.records:
             hidden = "TYPE_CHECKING" if rec.type_only else "function-local" if rec.deferred else ""
             for dst in sorted(import_targets(p, rec.module, rec.names)):
@@ -132,7 +132,7 @@ def check(p: Project) -> list[Finding]:
                 key="module-cycle:" + "|".join(comp),
                 message=msg,
                 site=first_site,
-                metric=len(inner),
+                metric=len(sites),  # import statements in the circle: one more is worse
                 notes=notes,
                 picture=picture,
                 hint=HINTS["module-cycle"],

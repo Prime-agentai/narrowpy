@@ -40,12 +40,13 @@ def analyze(root: Path, cfg: Config | None = None) -> Analysis:
         out += shallow.check(p, facts, cfg.max_interface)
     order = {name: i for i, name in enumerate(("module-cycle", "tangle", "field-leak", "shallow-module"))}
     out.sort(key=lambda f: (order[f.lint], f.site.file if f.site else "", f.site.line if f.site else 0, f.key))
+    modules, classes, functions = p.stats()
     return Analysis(
         root=p.root,
         findings=out,
-        modules=len(p.modules),
-        classes=len(p.classes),
-        functions=len(p.functions) + sum(len(c.methods) for c in p.classes.values()),
+        modules=modules,
+        classes=classes,
+        functions=functions,
         seconds=time.perf_counter() - t0,
         parse_errors=p.parse_errors,
     )
