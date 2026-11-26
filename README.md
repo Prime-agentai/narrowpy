@@ -153,6 +153,9 @@ lints = ["module-cycle", "tangle", "field-leak", "shallow-module"]
 baseline = ".narrowpy-baseline.json"
 ```
 
+A mistake in this table (a typo in a lint name, an unknown key, bad TOML) is printed to stderr, and
+the defaults stay on for what could not be read. It never switches a check off.
+
 There are no inline suppressions. Known findings live in one reviewed file, the baseline, and not
 in comments an agent can sprinkle.
 

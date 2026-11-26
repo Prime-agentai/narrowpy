@@ -168,6 +168,8 @@ def stop(event: dict[str, Any] | None = None) -> int:
     base_file = state / f"{session}.base"
     base = base_file.read_text(encoding="utf-8").strip() if base_file.is_file() else "HEAD"
     cfg = Config.load(root)
+    for problem in cfg.problems:
+        print(f"narrowpy: config: {problem}", file=sys.stderr)
     try:
         reference = findings_at(root, base, cfg)
     except GateError:

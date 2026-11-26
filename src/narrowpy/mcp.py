@@ -60,7 +60,7 @@ def run_check(args: dict[str, Any]) -> tuple[str, dict[str, Any], bool]:
     except GateError as exc:
         return f"narrowpy: {exc}", {"error": str(exc)}, True
     head = (f"narrowpy: {len(findings)} finding{'s' if len(findings) != 1 else ''} ({mode}) in "
-            f"{analysis.modules} modules")
+            f"{analysis.modules} modules" + "".join(f"\nnarrowpy: config: {p}" for p in cfg.problems))
     body = render.text(findings, label=labels) if findings else "No structural problems found."
     data = {"mode": mode, "modules": analysis.modules, "findings": [f.to_json() for f in findings]}
     return head + "\n\n" + body, data, False

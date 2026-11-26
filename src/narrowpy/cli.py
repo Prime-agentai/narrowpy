@@ -28,14 +28,10 @@ EXPLAIN = {
 
 def _config(args: argparse.Namespace, root: Path) -> Config:
     cfg = Config.load(root)
-    if getattr(args, "exclude", None):
-        cfg.exclude += args.exclude
-    if getattr(args, "include_tests", False):
-        cfg.include_tests = True
-    if getattr(args, "max_interface", None):
-        cfg.max_interface = args.max_interface
-    if getattr(args, "lint", None):
-        cfg.lints = [x for x in args.lint if x in LINTS]
+    for problem in cfg.problems:
+        print(f"narrowpy: config: {problem}", file=sys.stderr)
+    cfg.override(exclude=getattr(args, "exclude", None), include_tests=getattr(args, "include_tests", False),
+                 max_interface=getattr(args, "max_interface", None), lints=getattr(args, "lint", None))
     return cfg
 
 
