@@ -120,15 +120,26 @@ def _is_test_file(name: str) -> bool:
 
 
 def module_name(path: Path, root: Path) -> tuple[str, bool]:
-    """Dotted module name of ``path``: climb while the parent is a package."""
+    """Dotted module name of ``path``.
+
+    Climb through the parent directories and name the module from the highest
+    one that has an ``__init__.py``. A directory without one *below* a regular
+    package is a namespace package (PEP 420) and is part of the name, so
+    ``p/x/a.py`` under ``p/__init__.py`` is ``p.x.a``, not ``a``. With no
+    ``__init__.py`` anywhere above, the file is a top-level script or module.
+    """
     is_package = path.name == "__init__.py"
-    parts: list[str] = [] if is_package else [path.stem]
+    chain: list[Path] = []  # directories from the file's own up to the root (or the first one past it)
     d = path.parent
-    while (d / "__init__.py").is_file() and d != root.parent:
-        parts.insert(0, d.name)
+    while d != root.parent and d != d.parent:
+        chain.append(d)
         if d == root:
             break
         d = d.parent
+    top = max((i for i, c in enumerate(chain) if (c / "__init__.py").is_file()), default=-1)
+    parts = [c.name for c in reversed(chain[: top + 1])]
+    if not is_package:
+        parts.append(path.stem)
     return ".".join(parts), is_package
 
 

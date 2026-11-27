@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "narrowpy"
-version = "0.1.0"
+version = "0.1.1"
 description = "Deep modules, narrow interfaces: a structural linter and agent gate for Python. Finds module cycles (including the ones agents hide with function-local imports), field leaks, tangles and shallow modules, and blocks Claude Code from stopping when it made the structure worse. Zero dependencies."
 readme = "README.md"
 license = { text = "MIT" }

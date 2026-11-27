@@ -52,6 +52,24 @@ Calibration from this pass is now built into the rules:
 - `if __name__ == "__main__":` blocks are script code. rich's demo blocks had been pulling
   `rich.__main__` into the cycle.
 
+## Namespace sub-packages (found 2026-11-27 on Flask)
+
+Run on `pallets/flask` at the shallow clone of 2026-11-27 (`git clone --depth 1`, numbers from this
+tool, before and after the fix in 0.1.1). `src/flask/sansio/` has no `__init__.py`, so it is a
+namespace package under the regular package `flask`. 0.1.0 named a file by climbing only through
+directories that have an `__init__.py`, so `flask/sansio/app.py` was the top-level module `app`:
+
+| | 0.1.0 | 0.1.1 |
+|---|---|---|
+| module names | `app`, `blueprints` (wrong) | `flask.sansio.app`, `flask.sansio.blueprints` |
+| findings | 8 | 9 |
+| `flask` import cycle | 12 modules, and a bogus second cycle `app` / `blueprints` "in the top level" | 15 modules (`config`, `logging`, `sansio` now resolve into it), and a real `flask.sansio` cycle |
+| `tangle` | 16 things across 5 modules | 27 things across 13 modules |
+
+The other three repos run the same day (starlette, langgraph, openai-agents-python) gave identical
+finding counts before and after, so the change moves nothing where every directory is a package.
+Test: `tests/test_edges.py::test_namespace_subpackage_gets_its_full_name`.
+
 ## What it does not see
 
 The typer is deliberately conservative. A receiver gets a type only from annotations, constructor
